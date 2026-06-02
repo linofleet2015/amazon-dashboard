@@ -872,6 +872,27 @@
   </div>
 </div>
 
+<!-- GitHub Token Modal -->
+<div class="modal-overlay" id="tokenModal">
+  <div class="modal-box" style="width:480px;">
+    <h3>&#9881;&#65039; GitHub連携設定</h3>
+    <p class="modal-desc">月次データを全員に共有するために、GitHubのPersonal Access Token（PAT）を設定します。トークンはこのPCのブラウザにのみ保存され、他の人には見えません。</p>
+    <div style="background:#fff8ec;border-left:3px solid var(--amazon);padding:10px 14px;border-radius:6px;font-size:12px;color:#92400e;margin-bottom:14px;line-height:1.7;">
+      <strong>トークンの作成手順：</strong><br>
+      GitHub → Settings → Developer settings →<br>
+      Personal access tokens → <strong>Fine-grained tokens</strong> → Generate new token<br>
+      ・Repository access: <strong>amazon-dashboard のみ</strong><br>
+      ・Permissions → Contents: <strong>Read and Write</strong>
+    </div>
+    <input type="password" id="tokenInput" placeholder="github_pat_xxxx..." style="font-family:monospace;">
+    <div class="modal-footer">
+      <button class="btn" style="color:var(--red);border-color:#fca5a5;margin-right:auto;" id="deleteTokenBtn" onclick="deleteToken()">トークンを削除</button>
+      <button class="btn" onclick="closeTokenModal()">キャンセル</button>
+      <button class="btn primary" onclick="saveToken()">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1494,6 +1515,8 @@ setupDrop('aDrop', 'aFile', 'ads');
 
 // ページ読み込み時にオートセーブから自動復元
 tryAutoRestore();
+// 共有データをバックグラウンドで取得
+initSharedData();
 
 // Search with slight debounce
 let searchTimer;
@@ -1799,6 +1822,90 @@ function setupImportListener() {
   });
 }
 
+// ─── GITHUB SHARED DATA ───────────────────────────────────
+const GH_OWNER = 'linofleet2015';
+const GH_REPO  = 'amazon-dashboard';
+const GH_FILE  = 'data.json';
+const GH_TOKEN_KEY = 'amazon_dashboard_gh_token';
+
+let SHARED_DATA = null;
+let SHARED_DATA_LOADING = true;
+
+async function initSharedData() {
+  SHARED_DATA_LOADING = true;
+  try {
+    const url = `https://${GH_OWNER}.github.io/${GH_REPO}/${GH_FILE}?t=${Date.now()}`;
+    const resp = await fetch(url);
+    if (resp.ok) SHARED_DATA = await resp.json();
+  } catch(e) {}
+  SHARED_DATA_LOADING = false;
+  // 比較タブが開いていれば再描画
+  if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
+}
+
+async function pushSharedData() {
+  const token = localStorage.getItem(GH_TOKEN_KEY);
+  if (!token) { openTokenModal(); return; }
+  const snaps = getSnapshots();
+  if (!snaps.length) { toast('共有するデータがありません。先に月次データを保存してください。', true); return; }
+
+  toast('GitHubにアップロード中...');
+  try {
+    // 既存ファイルのSHAを取得（更新に必要）
+    let sha = null;
+    const getResp = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }
+    });
+    if (getResp.ok) sha = (await getResp.json()).sha;
+
+    const content = { version:1, updatedAt: new Date().toISOString(), snapshots: snaps };
+    const base64  = btoa(unescape(encodeURIComponent(JSON.stringify(content, null, 2))));
+    const body    = { message: `共有データを更新 (${new Date().toLocaleDateString('ja-JP')})`, content: base64 };
+    if (sha) body.sha = sha;
+
+    const putResp = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (putResp.ok) {
+      SHARED_DATA = content;
+      toast(`&#127760; GitHubに共有しました（${snaps.length}ヶ月分）。反映まで約1〜2分かかります。`);
+      renderCompareTab();
+    } else {
+      const err = await putResp.json();
+      if (putResp.status === 401) toast('トークンが無効です。再設定してください。', true);
+      else toast(`エラー: ${err.message}`, true);
+    }
+  } catch(e) { toast('ネットワークエラーが発生しました', true); }
+}
+
+// トークンモーダル
+function openTokenModal() {
+  const existing = localStorage.getItem(GH_TOKEN_KEY) || '';
+  document.getElementById('tokenInput').value = existing ? '••••••••••••••••' : '';
+  document.getElementById('deleteTokenBtn').style.display = existing ? 'inline-block' : 'none';
+  document.getElementById('tokenModal').classList.add('open');
+  if (!existing) setTimeout(() => document.getElementById('tokenInput').focus(), 50);
+}
+function closeTokenModal() { document.getElementById('tokenModal').classList.remove('open'); }
+function saveToken() {
+  const val = document.getElementById('tokenInput').value.trim();
+  if (!val || val === '••••••••••••••••') { closeTokenModal(); return; }
+  localStorage.setItem(GH_TOKEN_KEY, val);
+  closeTokenModal();
+  renderCompareTab();
+  toast('GitHubトークンを保存しました');
+}
+function deleteToken() {
+  if (!confirm('トークンを削除しますか？共有機能が使えなくなります。')) return;
+  localStorage.removeItem(GH_TOKEN_KEY);
+  closeTokenModal();
+  renderCompareTab();
+  toast('トークンを削除しました');
+}
+document.getElementById('tokenModal').addEventListener('click', e => { if (e.target.id === 'tokenModal') closeTokenModal(); });
+
 // ─── COMPARE RENDER ───────────────────────────────────────
 // 「2026年3月」「2025年12月」などのラベルを数値化して時系列ソート
 function parseLabel(label) {
@@ -1807,107 +1914,117 @@ function parseLabel(label) {
 }
 
 function renderCompareTab() {
-  // 保存順に関わらず年月の昇順（古い→新しい）で表示
-  const snaps = getSnapshots().slice().sort((a, b) => parseLabel(a.label) - parseLabel(b.label));
-  const container = document.getElementById('compareContent');
+  const container  = document.getElementById('compareContent');
+  const localSnaps = getSnapshots().slice().sort((a, b) => parseLabel(a.label) - parseLabel(b.label));
+  const token      = localStorage.getItem(GH_TOKEN_KEY);
 
-  // ── エクスポート／インポート（常に表示）──
-  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
-    <button class="btn" style="padding:8px 18px;font-size:13px;" onclick="exportAllData()">&#128228; 全データをエクスポート</button>
-    <button class="btn" style="padding:8px 18px;font-size:13px;" onclick="document.getElementById('importFile').click()">&#128229; データをインポート</button>
+  // ── アクションバー ──
+  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center;">
+    <button class="btn" style="padding:8px 15px;font-size:13px;" onclick="exportAllData()">&#128228; エクスポート</button>
+    <button class="btn" style="padding:8px 15px;font-size:13px;" onclick="document.getElementById('importFile').click()">&#128229; インポート</button>
     <input type="file" id="importFile" accept=".json" style="display:none">
-    <span style="color:var(--muted);font-size:12px;align-self:center;">※ 別のPC・URLへのデータ移行に使用</span>
+    <div style="flex:1;"></div>
+    <button class="btn${token ? ' primary' : ''}" style="padding:8px 15px;font-size:13px;"
+      onclick="${token ? 'pushSharedData()' : 'openTokenModal()'}">
+      &#127760; ${token ? 'GitHubに共有' : 'GitHub連携設定'}
+    </button>
+    ${token ? `<button class="btn" style="padding:8px 12px;font-size:13px;" onclick="openTokenModal()">&#9881;&#65039;</button>` : ''}
   </div>`;
 
-  // データがない場合はインポート案内を表示して終了
-  if (snaps.length === 0 && !localStorage.getItem(AS_KEY)) {
-    html += `<div class="compare-empty">
-      <div class="ei">&#128197;</div>
-      <p style="font-size:15px;font-weight:700;margin-bottom:8px;color:var(--text);">まだデータが保存されていません</p>
-      <p style="font-size:13px;">ダッシュボードタブでCSVを読み込み、<strong>「今月のデータを保存」</strong>ボタンで保存するか、<br>別環境のデータは上の<strong>「データをインポート」</strong>ボタンで読み込んでください。</p>
+  // ══ 共有データセクション ══════════════════════════════════
+  html += `<div style="margin-bottom:28px;">
+    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:12px;">
+      &#127760; 共有データ（全員閲覧可能）
     </div>`;
-    container.innerHTML = html;
-    setupImportListener();
-    return;
-  }
 
-  // ── オートセーブ情報バナー ──
+  if (SHARED_DATA_LOADING) {
+    html += `<div style="background:var(--card);border-radius:12px;padding:32px;text-align:center;color:var(--muted);box-shadow:0 1px 4px rgba(0,0,0,.08);">読み込み中...</div>`;
+  } else if (SHARED_DATA?.snapshots?.length) {
+    const shSnaps  = SHARED_DATA.snapshots.slice().sort((a, b) => parseLabel(a.label) - parseLabel(b.label));
+    const updStr   = new Date(SHARED_DATA.updatedAt).toLocaleDateString('ja-JP', {year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    const shPrev   = shSnaps.length >= 2 ? shSnaps[shSnaps.length-2] : null;
+    const shLast   = shSnaps[shSnaps.length-1];
+    html += `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:11px 18px;margin-bottom:14px;font-size:13px;color:#166534;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span>&#9989;</span>
+      <span>最終更新: <strong>${updStr}</strong> ／ <strong>${shSnaps.length}ヶ月</strong>分のデータ</span>
+    </div>`;
+    // 共有 月次推移テーブル
+    html += `<div class="compare-table-card" style="margin-bottom:16px;">
+      <div class="compare-table-header">&#128202; アカウント全体の月次推移</div>
+      <div class="compare-table-wrap"><table class="compare-table"><thead><tr>
+        <th>指標</th>
+        ${shSnaps.map(s=>`<th>${esc(s.label)}</th>`).join('')}
+        ${shPrev ? `<th style="min-width:110px;">前月比<br><span style="font-size:11px;font-weight:400;color:var(--muted)">${esc(shPrev.label)}→${esc(shLast.label)}</span></th>` : ''}
+      </tr></thead><tbody>${buildCompareRows(shSnaps)}</tbody></table></div>
+    </div>`;
+    // 共有 ASIN別トレンド
+    html += `<div class="asin-search-card">
+      <div class="asin-search-header">
+        &#128269; ASIN別トレンド検索
+        <input type="search" id="asinTrendQ" placeholder="ASINまたは商品名で検索..."
+          style="width:260px;padding:7px 12px;border:1px solid var(--border);border-radius:7px;font-size:13px;outline:none;"
+          oninput="renderAsinTrend()">
+        <label style="font-size:13px;font-weight:400;display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="asinTrendParent" checked onchange="renderAsinTrend()"> 親ASINでまとめる
+        </label>
+      </div>
+      <div class="asin-search-result" id="asinTrendResult">
+        <p style="color:var(--muted);font-size:13px;">ASINまたは商品名を入力すると月次トレンドを表示します</p>
+      </div>
+    </div>`;
+  } else {
+    html += `<div style="background:var(--card);border-radius:12px;padding:36px;text-align:center;color:var(--muted);box-shadow:0 1px 4px rgba(0,0,0,.08);">
+      <div style="font-size:40px;margin-bottom:10px;">&#127760;</div>
+      <p style="font-size:15px;font-weight:600;margin-bottom:8px;color:var(--text);">共有データはまだ公開されていません</p>
+      <p style="font-size:13px;">${token
+        ? '月次データを保存後、「GitHubに共有」ボタンで全員に公開できます。'
+        : '右上の「GitHub連携設定」でトークンを設定するとデータを共有できます。'}</p>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // ══ 個人保存データセクション ════════════════════════════
+  html += `<details>
+    <summary style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;cursor:pointer;padding:6px 0;user-select:none;list-style:none;display:flex;align-items:center;gap:6px;">
+      <span style="font-size:16px;">&#9654;</span> &#128190; 個人保存データ（このPCのみ）
+    </summary>
+    <div style="margin-top:14px;">`;
+
+  // オートセーブバナー
   try {
-    const asRaw = localStorage.getItem(AS_KEY);
-    if (asRaw) {
-      const asData = JSON.parse(asRaw);
-      const dateStr = new Date(asData.savedAt).toLocaleDateString('ja-JP', {
-        year:'numeric', month:'long', day:'numeric', hour:'2-digit', minute:'2-digit',
-      });
-      html += `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;
-                            padding:13px 20px;margin-bottom:20px;font-size:13px;color:#1e40af;
-                            display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <span style="font-size:20px;">&#128190;</span>
-        <span>
-          <strong>オートセーブ</strong>: ${dateStr} 保存
-          ／ <strong>${asData.rows.length}件</strong>のASINデータ
-        </span>
-        <button class="btn primary" style="margin-left:auto;padding:6px 14px;font-size:12px;"
-          onclick="restoreAutoSave()">&#128202; ダッシュボードに復元</button>
+    const asData = JSON.parse(localStorage.getItem(AS_KEY));
+    if (asData?.rows?.length) {
+      const dateStr = new Date(asData.savedAt).toLocaleDateString('ja-JP', {year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      html += `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 18px;margin-bottom:14px;font-size:13px;color:#1e40af;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:18px;">&#128190;</span>
+        <span><strong>オートセーブ</strong>: ${dateStr} ／ <strong>${asData.rows.length}件</strong></span>
+        <button class="btn primary" style="margin-left:auto;padding:5px 12px;font-size:12px;" onclick="restoreAutoSave()">&#128202; ダッシュボードに復元</button>
       </div>`;
     }
   } catch(e) {}
 
-  // ── 保存データ管理 ──
-  html += `<div class="snap-list">
-    <div class="snap-list-header">&#128193; 保存済みデータ（${snaps.length}件）</div>`;
-  snaps.slice().reverse().forEach(s => {
-    const date = new Date(s.savedAt).toLocaleDateString('ja-JP');
-    const escLabel = esc(s.label);
-    html += `<div class="snap-item">
-      <span class="snap-label">${escLabel}</span>
-      <span class="snap-meta">保存日: ${date} ／ ${s.summary.count}件のASIN ／ 売上: ${fmtYen(s.summary.totalSales)}</span>
-      <div class="snap-actions">
-        <button class="btn primary" style="padding:5px 11px;font-size:12px;"
-          data-label="${escLabel}" onclick="restoreSnapshot(this.dataset.label)">&#128202; 表示</button>
-        <button class="btn" style="padding:5px 11px;font-size:12px;"
-          data-label="${escLabel}" onclick="openRenameModal(this.dataset.label)">&#9998; 名前変更</button>
-        <button class="btn" style="padding:5px 11px;font-size:12px;color:var(--red);border-color:#fca5a5;"
-          data-label="${escLabel}" onclick="deleteSnapshot(this.dataset.label)">&#128465; 削除</button>
-      </div>
-    </div>`;
-  });
-  html += `</div>`;
-
-  // ── 月次推移テーブル ──
-  const prev  = snaps.length >= 2 ? snaps[snaps.length-2] : null;
-  const last  = snaps[snaps.length-1];
-  const diffLabel = prev ? `${esc(prev.label)}→${esc(last.label)}` : '';
-  html += `<div class="compare-table-card">
-    <div class="compare-table-header">&#128202; アカウント全体の月次推移</div>
-    <div class="compare-table-wrap"><table class="compare-table">
-      <thead><tr>
-        <th>指標</th>
-        ${snaps.map(s=>`<th>${esc(s.label)}</th>`).join('')}
-        ${prev ? `<th style="min-width:110px;">前月比<br><span style="font-size:11px;font-weight:400;color:var(--muted)">${diffLabel}</span></th>` : ''}
-      </tr></thead>
-      <tbody>${buildCompareRows(snaps)}</tbody>
-    </table></div>
-  </div>`;
-
-  // ── ASIN別トレンド ──
-  html += `<div class="asin-search-card">
-    <div class="asin-search-header">
-      &#128269; ASIN別トレンド検索
-      <input type="search" id="asinTrendQ" placeholder="ASINまたは商品名で検索..."
-        style="width:260px;padding:7px 12px;border:1px solid var(--border);border-radius:7px;font-size:13px;outline:none;"
-        oninput="renderAsinTrend()">
-      <label style="font-size:13px;font-weight:500;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400;">
-        <input type="checkbox" id="asinTrendParent" checked onchange="renderAsinTrend()"> 親ASINでまとめる
-      </label>
-    </div>
-    <div class="asin-search-result" id="asinTrendResult">
-      <p style="color:var(--muted);font-size:13px;">ASINまたは商品名を入力すると月次トレンドを表示します</p>
-    </div>
-  </div>`;
+  if (!localSnaps.length) {
+    html += `<p style="color:var(--muted);font-size:13px;padding:8px 0;">保存された月次データがありません。</p>`;
+  } else {
+    html += `<div class="snap-list"><div class="snap-list-header">&#128193; 保存済みデータ（${localSnaps.length}件）</div>`;
+    localSnaps.slice().reverse().forEach(s => {
+      const escLabel = esc(s.label);
+      html += `<div class="snap-item">
+        <span class="snap-label">${escLabel}</span>
+        <span class="snap-meta">${new Date(s.savedAt).toLocaleDateString('ja-JP')} ／ ${s.summary.count}件 ／ ${fmtYen(s.summary.totalSales)}</span>
+        <div class="snap-actions">
+          <button class="btn primary" style="padding:5px 10px;font-size:12px;" data-label="${escLabel}" onclick="restoreSnapshot(this.dataset.label)">&#128202; 表示</button>
+          <button class="btn" style="padding:5px 10px;font-size:12px;" data-label="${escLabel}" onclick="openRenameModal(this.dataset.label)">&#9998;</button>
+          <button class="btn" style="padding:5px 10px;font-size:12px;color:var(--red);border-color:#fca5a5;" data-label="${escLabel}" onclick="deleteSnapshot(this.dataset.label)">&#128465;</button>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  html += `</div></details>`;
 
   container.innerHTML = html;
-  setupImportListener(); // DOMが再生成されるたびにリスナーを再設定
+  setupImportListener();
 }
 
 function buildCompareRows(snaps) {
@@ -1952,7 +2069,8 @@ function renderAsinTrend() {
     result.innerHTML = `<p style="color:var(--muted);font-size:13px;">ASINまたは商品名を入力すると月次トレンドを表示します</p>`;
     return;
   }
-  const snaps = getSnapshots();
+  // 共有データがあればそちらを優先、なければ個人データ
+  const snaps = (SHARED_DATA?.snapshots?.length ? SHARED_DATA.snapshots : getSnapshots());
   if (!snaps.length) return;
 
   // スナップショットごとに1回だけグループ化（パフォーマンス最適化）
