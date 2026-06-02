@@ -1834,20 +1834,34 @@ let SHARED_DATA_LOADING = false;
 async function initSharedData() {
   SHARED_DATA_LOADING = true;
   if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
-  // raw.githubusercontent.com を優先（GitHub Pages より即時反映・安定）
-  const urls = [
-    `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/${GH_FILE}?t=${Date.now()}`,
-    `https://${GH_OWNER}.github.io/${GH_REPO}/${GH_FILE}?t=${Date.now()}`,
+
+  // GitHub API（コミット直後から取得可能）→ raw URL の順で試す
+  const token = localStorage.getItem(GH_TOKEN_KEY);
+  const apiHeaders = { Accept: 'application/vnd.github.raw' };
+  if (token) apiHeaders.Authorization = `Bearer ${token}`;
+
+  const fetchers = [
+    // ① GitHub API raw content（即時反映・最優先）
+    () => fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${GH_FILE}`,
+                { headers: apiHeaders, cache: 'no-store' }),
+    // ② raw.githubusercontent.com（バックアップ）
+    () => fetch(`https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/${GH_FILE}?t=${Date.now()}`,
+                { cache: 'no-store' }),
   ];
-  for (const url of urls) {
+
+  for (const fetcher of fetchers) {
     try {
       const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 15000); // 15秒タイムアウト
-      const resp = await fetch(url, { signal: controller.signal });
+      const tid = setTimeout(() => controller.abort(), 15000);
+      const resp = await fetcher();
       clearTimeout(tid);
-      if (resp.ok) { SHARED_DATA = await resp.json(); break; }
-    } catch(e) { /* 次のURLを試す */ }
+      if (resp && resp.ok) {
+        const data = await resp.json();
+        if (data?.snapshots?.length) { SHARED_DATA = data; break; }
+      }
+    } catch(e) { /* 次の手段を試す */ }
   }
+
   SHARED_DATA_LOADING = false;
   if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
 }
@@ -1867,8 +1881,18 @@ async function pushSharedData() {
     });
     if (getResp.ok) sha = (await getResp.json()).sha;
 
-    const content = { version:1, updatedAt: new Date().toISOString(), snapshots: snaps };
-    const base64  = btoa(unescape(encodeURIComponent(JSON.stringify(content, null, 2))));
+    // 共有用に必要最小限のフィールドのみ保存（ファイルサイズ削減）
+    const slimSnaps = snaps.map(s => ({
+      label: s.label, savedAt: s.savedAt, summary: s.summary,
+      rows: s.rows.map(r => ({
+        asin:r.asin, parentAsin:r.parentAsin, title:r.title,
+        sessions:r.sessions, cvr:r.cvr, sales:r.sales,
+        orgSales:r.orgSales, spend:r.spend, adSales:r.adSales,
+        totAcos:r.totAcos, stdAcos:r.stdAcos,
+      })),
+    }));
+    const content = { version:2, updatedAt: new Date().toISOString(), snapshots: slimSnaps };
+    const base64  = btoa(unescape(encodeURIComponent(JSON.stringify(content))));
     const body    = { message: `共有データを更新 (${new Date().toLocaleDateString('ja-JP')})`, content: base64 };
     if (sha) body.sha = sha;
 
@@ -1933,6 +1957,8 @@ function renderCompareTab() {
     <button class="btn" style="padding:8px 15px;font-size:13px;" onclick="document.getElementById('importFile').click()">&#128229; インポート</button>
     <input type="file" id="importFile" accept=".json" style="display:none">
     <div style="flex:1;"></div>
+    <button class="btn" style="padding:8px 12px;font-size:13px;" title="共有データを再読み込み"
+      onclick="SHARED_DATA=null;initSharedData();">&#128260;</button>
     <button class="btn${token ? ' primary' : ''}" style="padding:8px 15px;font-size:13px;"
       onclick="${token ? 'pushSharedData()' : 'openTokenModal()'}">
       &#127760; ${token ? 'GitHubに共有' : 'GitHub連携設定'}
