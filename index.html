@@ -1829,17 +1829,20 @@ const GH_FILE  = 'data.json';
 const GH_TOKEN_KEY = 'amazon_dashboard_gh_token';
 
 let SHARED_DATA = null;
-let SHARED_DATA_LOADING = true;
+let SHARED_DATA_LOADING = false;
 
 async function initSharedData() {
   SHARED_DATA_LOADING = true;
+  if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
   try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 8000); // 8秒でタイムアウト
     const url = `https://${GH_OWNER}.github.io/${GH_REPO}/${GH_FILE}?t=${Date.now()}`;
-    const resp = await fetch(url);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(tid);
     if (resp.ok) SHARED_DATA = await resp.json();
-  } catch(e) {}
+  } catch(e) { /* タイムアウト・ネットワークエラーは無視 */ }
   SHARED_DATA_LOADING = false;
-  // 比較タブが開いていれば再描画
   if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
 }
 
@@ -1870,7 +1873,7 @@ async function pushSharedData() {
     });
     if (putResp.ok) {
       SHARED_DATA = content;
-      toast(`&#127760; GitHubに共有しました（${snaps.length}ヶ月分）。反映まで約1〜2分かかります。`);
+      toast(`🌐 GitHubに共有しました（${snaps.length}ヶ月分）。反映まで約1〜2分かかります。`);
       renderCompareTab();
     } else {
       const err = await putResp.json();
