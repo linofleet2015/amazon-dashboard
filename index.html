@@ -1834,14 +1834,20 @@ let SHARED_DATA_LOADING = false;
 async function initSharedData() {
   SHARED_DATA_LOADING = true;
   if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
-  try {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 8000); // 8秒でタイムアウト
-    const url = `https://${GH_OWNER}.github.io/${GH_REPO}/${GH_FILE}?t=${Date.now()}`;
-    const resp = await fetch(url, { signal: controller.signal });
-    clearTimeout(tid);
-    if (resp.ok) SHARED_DATA = await resp.json();
-  } catch(e) { /* タイムアウト・ネットワークエラーは無視 */ }
+  // raw.githubusercontent.com を優先（GitHub Pages より即時反映・安定）
+  const urls = [
+    `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/main/${GH_FILE}?t=${Date.now()}`,
+    `https://${GH_OWNER}.github.io/${GH_REPO}/${GH_FILE}?t=${Date.now()}`,
+  ];
+  for (const url of urls) {
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 15000); // 15秒タイムアウト
+      const resp = await fetch(url, { signal: controller.signal });
+      clearTimeout(tid);
+      if (resp.ok) { SHARED_DATA = await resp.json(); break; }
+    } catch(e) { /* 次のURLを試す */ }
+  }
   SHARED_DATA_LOADING = false;
   if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
 }
