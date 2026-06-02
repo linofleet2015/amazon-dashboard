@@ -1752,6 +1752,53 @@ document.addEventListener('keydown', e => {
   });
 });
 
+// ─── EXPORT / IMPORT ─────────────────────────────────────
+function exportAllData() {
+  const snaps = getSnapshots();
+  let autosave = null;
+  try { autosave = JSON.parse(localStorage.getItem(AS_KEY) || 'null'); } catch(e) {}
+  if (!snaps.length && !autosave) { toast('エクスポートするデータがありません', true); return; }
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    snapshots: snaps,
+    autosave: autosave,
+  };
+  const json = JSON.stringify(payload, null, 2);
+  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const a = Object.assign(document.createElement('a'), {
+    href: url,
+    download: `amazon_dashboard_backup_${new Date().toISOString().slice(0,10)}.json`,
+  });
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`エクスポート完了（月次データ${snaps.length}件）`);
+}
+
+function setupImportListener() {
+  const input = document.getElementById('importFile');
+  if (!input || input._importReady) return;
+  input._importReady = true;
+  input.addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (!data.version) throw new Error('invalid');
+      if (Array.isArray(data.snapshots)) saveSnapshots(data.snapshots);
+      if (data.autosave?.rows?.length) {
+        localStorage.setItem(AS_KEY, JSON.stringify(data.autosave));
+        restoreRows(data.autosave.rows, false);
+      }
+      e.target.value = '';
+      renderCompareTab();
+      toast(`インポート完了（月次データ${data.snapshots?.length || 0}件）`);
+    } catch(err) {
+      toast('インポート失敗：正しいバックアップファイルか確認してください', true);
+    }
+  });
+}
+
 // ─── COMPARE RENDER ───────────────────────────────────────
 // 「2026年3月」「2025年12月」などのラベルを数値化して時系列ソート
 function parseLabel(label) {
@@ -1774,8 +1821,15 @@ function renderCompareTab() {
     return;
   }
 
+  // ── エクスポート／インポート ──
+  let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+    <button class="btn" style="padding:8px 18px;font-size:13px;" onclick="exportAllData()">&#128228; 全データをエクスポート</button>
+    <button class="btn" style="padding:8px 18px;font-size:13px;" onclick="document.getElementById('importFile').click()">&#128229; データをインポート</button>
+    <input type="file" id="importFile" accept=".json" style="display:none">
+    <span style="color:var(--muted);font-size:12px;align-self:center;">※ 別のPC・URLへのデータ移行に使用</span>
+  </div>`;
+
   // ── オートセーブ情報バナー ──
-  let html = '';
   try {
     const asRaw = localStorage.getItem(AS_KEY);
     if (asRaw) {
@@ -1851,6 +1905,7 @@ function renderCompareTab() {
   </div>`;
 
   container.innerHTML = html;
+  setupImportListener(); // DOMが再生成されるたびにリスナーを再設定
 }
 
 function buildCompareRows(snaps) {
