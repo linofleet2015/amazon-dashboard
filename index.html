@@ -1811,23 +1811,25 @@ function renderCompareTab() {
   const snaps = getSnapshots().slice().sort((a, b) => parseLabel(a.label) - parseLabel(b.label));
   const container = document.getElementById('compareContent');
 
-  if (snaps.length === 0) {
-    container.innerHTML = `
-      <div class="compare-empty">
-        <div class="ei">&#128197;</div>
-        <p style="font-size:15px;font-weight:700;margin-bottom:8px;color:var(--text);">まだデータが保存されていません</p>
-        <p style="font-size:13px;">ダッシュボードタブでCSVを読み込み、<br><strong>「今月のデータを保存」</strong>ボタンで月次データを保存してください。</p>
-      </div>`;
-    return;
-  }
-
-  // ── エクスポート／インポート ──
+  // ── エクスポート／インポート（常に表示）──
   let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
     <button class="btn" style="padding:8px 18px;font-size:13px;" onclick="exportAllData()">&#128228; 全データをエクスポート</button>
     <button class="btn" style="padding:8px 18px;font-size:13px;" onclick="document.getElementById('importFile').click()">&#128229; データをインポート</button>
     <input type="file" id="importFile" accept=".json" style="display:none">
     <span style="color:var(--muted);font-size:12px;align-self:center;">※ 別のPC・URLへのデータ移行に使用</span>
   </div>`;
+
+  // データがない場合はインポート案内を表示して終了
+  if (snaps.length === 0 && !localStorage.getItem(AS_KEY)) {
+    html += `<div class="compare-empty">
+      <div class="ei">&#128197;</div>
+      <p style="font-size:15px;font-weight:700;margin-bottom:8px;color:var(--text);">まだデータが保存されていません</p>
+      <p style="font-size:13px;">ダッシュボードタブでCSVを読み込み、<strong>「今月のデータを保存」</strong>ボタンで保存するか、<br>別環境のデータは上の<strong>「データをインポート」</strong>ボタンで読み込んでください。</p>
+    </div>`;
+    container.innerHTML = html;
+    setupImportListener();
+    return;
+  }
 
   // ── オートセーブ情報バナー ──
   try {
