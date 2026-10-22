@@ -635,7 +635,7 @@
     }
     .asin-search-result { padding: 16px 22px; }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="vendor/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -1378,7 +1378,7 @@ function renderTable() {
     const childBadge = isParent && r.childCount > 1
       ? `<span class="child-count">${r.childCount}件</span>` : '';
     return `<tr>
-      <td>${r.asin}${childBadge}</td>
+      <td>${esc(r.asin)}${childBadge}</td>
       <td title="${esc(r.title)}">${esc(r.title)}</td>
       <td>${r.sessions > 0 ? r.sessions.toLocaleString() : '-'}</td>
       <td>${r.pv > 0 ? r.pv.toLocaleString() : '-'}</td>
@@ -1490,7 +1490,7 @@ function showStatus(type, cls, name, rows) {
   const el = $(type === 'biz' ? 'bStatus' : 'aStatus');
   el.className = 'file-status ' + cls;
   el.innerHTML = cls === 'ok'
-    ? `&#9989; ${esc(name)} <span class="rows">${rows}行</span>`
+    ? `&#9989; ${esc(name)} <span class="rows">${esc(rows)}行</span>`
     : `&#9888;&#65039; ${esc(name)}`;
 }
 
@@ -1827,6 +1827,11 @@ const GH_OWNER = 'linofleet2015';
 const GH_REPO  = 'amazon-dashboard';
 const GH_FILE  = 'data.json';
 const GH_TOKEN_KEY = 'amazon_dashboard_gh_token';
+// トークンはタブを閉じると消える sessionStorage に保存する（旧localStorage保存分は削除）
+try { localStorage.removeItem(GH_TOKEN_KEY); } catch(e) {}
+const ghTokenGet    = () => { try { return sessionStorage.getItem(GH_TOKEN_KEY); } catch(e) { return null; } };
+const ghTokenSet    = v  => { try { sessionStorage.setItem(GH_TOKEN_KEY, v); } catch(e) {} };
+const ghTokenRemove = () => { try { sessionStorage.removeItem(GH_TOKEN_KEY); } catch(e) {} };
 
 let SHARED_DATA = null;
 let SHARED_DATA_LOADING = false;
@@ -1836,7 +1841,7 @@ async function initSharedData() {
   if (document.getElementById('tabCompare').classList.contains('active')) renderCompareTab();
 
   // GitHub API（コミット直後から取得可能）→ raw URL の順で試す
-  const token = localStorage.getItem(GH_TOKEN_KEY);
+  const token = ghTokenGet();
   const apiHeaders = { Accept: 'application/vnd.github.raw' };
   if (token) apiHeaders.Authorization = `Bearer ${token}`;
 
@@ -1867,7 +1872,7 @@ async function initSharedData() {
 }
 
 async function pushSharedData() {
-  const token = localStorage.getItem(GH_TOKEN_KEY);
+  const token = ghTokenGet();
   if (!token) { openTokenModal(); return; }
   const snaps = getSnapshots();
   if (!snaps.length) { toast('共有するデータがありません。先に月次データを保存してください。', true); return; }
@@ -1915,7 +1920,7 @@ async function pushSharedData() {
 
 // トークンモーダル
 function openTokenModal() {
-  const existing = localStorage.getItem(GH_TOKEN_KEY) || '';
+  const existing = ghTokenGet() || '';
   document.getElementById('tokenInput').value = existing ? '••••••••••••••••' : '';
   document.getElementById('deleteTokenBtn').style.display = existing ? 'inline-block' : 'none';
   document.getElementById('tokenModal').classList.add('open');
@@ -1925,14 +1930,14 @@ function closeTokenModal() { document.getElementById('tokenModal').classList.rem
 function saveToken() {
   const val = document.getElementById('tokenInput').value.trim();
   if (!val || val === '••••••••••••••••') { closeTokenModal(); return; }
-  localStorage.setItem(GH_TOKEN_KEY, val);
+  ghTokenSet(val);
   closeTokenModal();
   renderCompareTab();
   toast('GitHubトークンを保存しました');
 }
 function deleteToken() {
   if (!confirm('トークンを削除しますか？共有機能が使えなくなります。')) return;
-  localStorage.removeItem(GH_TOKEN_KEY);
+  ghTokenRemove();
   closeTokenModal();
   renderCompareTab();
   toast('トークンを削除しました');
@@ -1949,7 +1954,7 @@ function parseLabel(label) {
 function renderCompareTab() {
   const container  = document.getElementById('compareContent');
   const localSnaps = getSnapshots().slice().sort((a, b) => parseLabel(a.label) - parseLabel(b.label));
-  const token      = localStorage.getItem(GH_TOKEN_KEY);
+  const token      = ghTokenGet();
 
   // ── アクションバー ──
   let html = `<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;align-items:center;">
@@ -2046,7 +2051,7 @@ function renderCompareTab() {
       const escLabel = esc(s.label);
       html += `<div class="snap-item">
         <span class="snap-label">${escLabel}</span>
-        <span class="snap-meta">${new Date(s.savedAt).toLocaleDateString('ja-JP')} ／ ${s.summary.count}件 ／ ${fmtYen(s.summary.totalSales)}</span>
+        <span class="snap-meta">${new Date(s.savedAt).toLocaleDateString('ja-JP')} ／ ${esc(s.summary.count)}件 ／ ${esc(fmtYen(s.summary.totalSales))}</span>
         <div class="snap-actions">
           <button class="btn primary" style="padding:5px 10px;font-size:12px;" data-label="${escLabel}" onclick="restoreSnapshot(this.dataset.label)">&#128202; 表示</button>
           <button class="btn" style="padding:5px 10px;font-size:12px;" data-label="${escLabel}" onclick="openRenameModal(this.dataset.label)">&#9998;</button>
@@ -2077,7 +2082,7 @@ function buildCompareRows(snaps) {
     { label:'管理ASIN数',      key:'count',      fmt:v=>v+'件',                                   lib:false },
   ];
   return metrics.map(m => {
-    const cells = snaps.map(s => `<td>${m.fmt(s.summary[m.key])}</td>`).join('');
+    const cells = snaps.map(s => `<td>${esc(m.fmt(s.summary[m.key]))}</td>`).join('');
     let diff = '';
     if (prev) {
       const c = last.summary[m.key], p = prev.summary[m.key];
@@ -2147,7 +2152,7 @@ function renderAsinTrend() {
     const rowsHtml = trendMetrics.map(m => {
       const cells = processed.map(s => {
         const r = s.prows.find(x => x.asin === asin);
-        return `<td>${r != null ? m.fmt(r[m.key]) : '<span style="color:var(--muted)">-</span>'}</td>`;
+        return `<td>${r != null ? esc(m.fmt(r[m.key])) :'<span style="color:var(--muted)">-</span>'}</td>`;
       }).join('');
       return `<tr><td>${m.label}</td>${cells}</tr>`;
     }).join('');
@@ -2173,7 +2178,7 @@ function renderAsinTrend() {
 
 // ─── UTILITIES ────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
-function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 let toastTimer;
 function toast(msg, err = false) {
